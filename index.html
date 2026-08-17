@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Subathon Overlay - limitlesslevon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; margin: 0; padding: 0;
+    background: transparent; overflow: hidden;
+    font-family: 'Nunito', sans-serif;
+  }
+  #stage {
+    position: absolute; top: 50%; left: 50%;
+    width: 1920px; height: 1080px;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #timer {
+    font-size: 220px; font-weight: 900; letter-spacing: 0.02em;
+    line-height: 1; color: #ff0000;
+    text-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+    min-width: 900px; text-align: center;
+  }
+  #status {
+    margin-top: 16px; font-size: 32px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.85;
+    color: #ffffff; text-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    height: 40px;
+  }
+  #debug {
+    margin-top: 8px; font-size: 16px; color: #ffff66; opacity: 0.8;
+    max-width: 1400px; text-align: center; word-break: break-all;
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="timer">--:--:--</div>
+    <div id="status">CONNECTING...</div>
+    <div id="debug"></div>
+  </div>
+
+<script>
+/* ---------- Config ----------
+   Points at your Cloudflare Worker, which holds the real token and
+   fixes CORS. See worker.js for that side of things.
+
+   Confirmed 7overlay /state shape:
+   {
+     "is_running": false,
+     "time_remaining_seconds": 86400,
+     "timer": { "seconds": 86400, "running": false, ... },
+     ...
+   }
+   ------------------------------- */
+const WORKER_BASE = "https://levonathon.businessepictechie.workers.dev";
+const STATE_URL = `${WORKER_BASE}/state`;
+const POLL_MS = 900;
+
+// Add ?debug=1 to the page URL (while testing in a normal browser tab,
+// NOT in OBS) to show the last raw error under the status line.
+const DEBUG = new URLSearchParams(location.search).has("debug");
+
+let lastGoodTimeText = "--:--:--";
+let consecutiveFailures = 0;
+
+const timerEl = document.getElementById("timer");
+const statusEl = document.getElementById("status");
+const debugEl = document.getElementById("debug");
+
+function formatTime(totalSeconds) {
+  totalSeconds = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+// Matches 7overlay.com's real /state response, with fallbacks kept
+// in case the shape ever changes.
+function extractSeconds(data) {
+  if (!data || typeof data !== "object") return null;
+
+  const direct =
+    data.time_remaining_seconds ??      // <-- actual 7overlay field
+    data.timeRemainingSeconds ??
+    data.secondsRemaining ??
+    data.remainingSeconds ??
+    data.remaining_seconds ??
+    data.remaining ??
+    (data.timer && data.timer.seconds) ??
+    null;
+
+  if (direct !== null && direct !== undefined && !Number.isNaN(Number(direct))) {
+    return Number(direct);
+  }
+
+  const endCandidate =
+    data.endsAt ?? data.ends_at ?? data.endTime ?? data.end_time ?? null;
+  if (endCandidate) {
+    const endMs = typeof endCandidate === "number"
+      ? endCandidate * (endCandidate < 2e10 ? 1000 : 1)
+      : new Date(endCandidate).getTime();
+    if (!Number.isNaN(endMs)) return (endMs - Date.now()) / 1000;
+  }
+
+  return null;
+}
+
+function extractIsRunning(data) {
+  if (!data || typeof data !== "object") return false;
+  const v =
+    data.is_running ??                  // <-- actual 7overlay field
+    data.isRunning ??
+    data.running ??
+    (data.timer && data.timer.running) ??
+    false;
+  return Boolean(v);
+}
+
+async function fetchState() {
+  try {
+    const res = await fetch(STATE_URL, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const data = await res.json();
+    const seconds = extractSeconds(data);
+    if (seconds === null || Number.isNaN(seconds)) {
+      throw new Error(`Unrecognized JSON shape: ${JSON.stringify(data).slice(0, 500)}`);
+    }
+
+    lastGoodTimeText = formatTime(seconds);
+    timerEl.textContent = lastGoodTimeText;
+    statusEl.textContent = extractIsRunning(data) ? "LIVE" : "PAUSED";
+    consecutiveFailures = 0;
+    if (DEBUG) debugEl.textContent = "";
+  } catch (err) {
+    consecutiveFailures++;
+    timerEl.textContent = lastGoodTimeText;
+    statusEl.textContent = consecutiveFailures >= 3 ? "CONNECTION LOST" : "RECONNECTING...";
+    console.error("[subathon-overlay] fetchState failed:", err);
+    if (DEBUG) debugEl.textContent = String(err && err.message ? err.message : err);
+  }
+}
+
+fetchState();
+setInterval(fetchState, POLL_MS);
+</script>
+</body>
+</html>
