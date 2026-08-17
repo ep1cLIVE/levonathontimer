@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Subathon Overlay - limitlesslevon</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root { --red: #650000; --panic: #d60000; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; background: var(--red); overflow: hidden; font-family: Nunito, sans-serif; }
+    #wrap { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #ff0000; }
+    #timer { font-size: 12vw; font-weight: 900; letter-spacing: .02em; line-height: 1; transition: color .4s ease; text-shadow: 0 4px 12px rgba(0,0,0,.25); }
+    #timer.panic { color: var(--panic); animation: pulse 1s infinite; }
+    #label { margin-top: .6vw; font-size: 2.2vw; font-weight: 700; text-transform: uppercase; letter-spacing: .15em; opacity: .85; }
+    #flash { position: absolute; top: 8%; font-size: 3vw; font-weight: 700; color: #fff; opacity: 0; transform: translateY(10px); transition: opacity .3s ease, transform .3s ease; }
+    #flash.show { opacity: 1; transform: translateY(0); }
+    #status { position: absolute; bottom: 4%; font-size: 1.4vw; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; opacity: .75; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="flash"></div>
+    <div id="timer">--:--:--</div>
+    <div id="label">LEVONATHON</div>
+    <div id="status">CONNECTING</div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // GitHub Pages serves this file over HTTPS. The API must allow CORS from
+    // your page's origin; otherwise Chrome will block the requests.
+    const BASE = 'https://7overlay.com/api/subathon-integrations/KKCGWf8d0sE';
+    const TOKEN = 'soiXrAAltMAMBjE-kwcUWwsTYjI6313XUrsFi3GjT9Bq9DDfzbN-tqqpQ';
+    const STATE_URL = `${BASE}/state?token=${encodeURIComponent(TOKEN)}`;
+    const EVENTS_URL = `${BASE}/events?token=${encodeURIComponent(TOKEN)}`;
+    const POLL_MS = 900;
+
+    const timerEl = document.getElementById('timer');
+    const statusEl = document.getElementById('status');
+    const flashEl = document.getElementById('flash');
+    let lastEventId = null;
+    let flashTimeout;
+
+    function formatTime(seconds) {
+      seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      const pad = n => String(n).padStart(2, '0');
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    }
+
+    async function getJson(url) {
+      const response = await fetch(url, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' }
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }
+
+    async function fetchState() {
+      try {
+        const data = await getJson(STATE_URL);
+        const remaining = Number(data.timeremainingseconds ?? data.timeRemainingSeconds ?? 0);
+        timerEl.textContent = formatTime(remaining);
+        timerEl.classList.toggle('panic', remaining <= Number(data.panicthresholdseconds ?? 0));
+        statusEl.textContent = data.isrunning ? 'LIVE' : 'PAUSED';
+      } catch (error) {
+        console.error('State request failed:', error);
+        statusEl.textContent = 'CONNECTION LOST';
+      }
+    }
+
+    async function fetchEvents() {
+      try {
+        const events = await getJson(EVENTS_URL);
+        if (!Array.isArray(events) || events.length === 0) return;
+        const latest = events[events.length - 1];
+        if (latest.id != null && latest.id !== lastEventId) {
+          lastEventId = latest.id;
+          flashEl.textContent = `${latest.label ?? 'EVENT'} ${latest.secondsdelta ?? ''}`.trim();
+          flashEl.classList.add('show');
+          clearTimeout(flashTimeout);
+          flashTimeout = setTimeout(() => flashEl.classList.remove('show'), 2500);
+        }
+      } catch (error) {
+        console.error('Events request failed:', error);
+      }
+    }
+
+    fetchState();
+    fetchEvents();
+    setInterval(fetchState, POLL_MS);
+    setInterval(fetchEvents, POLL_MS);
+  </script>
+</body>
+</html>
